@@ -228,7 +228,7 @@ describe('admin_console/team_channel_settings/channel/ChannelDetails', () => {
         );
 
         await userEvent.click(screen.getByRole('button', {name: 'EditChannelAttribute'}));
-        await userEvent.click(screen.getByTestId('saveSetting'));
+        await userEvent.click(screen.getByTestId('admin.channel.save_panel.save--button'));
 
         await waitFor(() => expect(screen.getByText('attribute save failed')).toBeInTheDocument());
         expect(patchChannelAttributeValues).toHaveBeenCalledWith(testChannel.id, [{field_id: 'field1', value: 'value1'}]);
@@ -268,7 +268,7 @@ describe('admin_console/team_channel_settings/channel/ChannelDetails', () => {
             const {patchChannelAttributeValues} = renderDetails(testChannel);
 
             await userEvent.click(screen.getByRole('button', {name: 'ClearRequiredAttribute'}));
-            await userEvent.click(screen.getByTestId('saveSetting'));
+            await userEvent.click(screen.getByTestId('admin.channel.save_panel.save--button'));
 
             expect(await screen.findByText('Set a value for Program before saving. This attribute is required.')).toBeInTheDocument();
             expect(patchChannelAttributeValues).not.toHaveBeenCalled();
@@ -279,7 +279,7 @@ describe('admin_console/team_channel_settings/channel/ChannelDetails', () => {
 
             await userEvent.click(screen.getByRole('button', {name: 'Unarchive Channel'}));
             await userEvent.click(screen.getByRole('button', {name: 'EditWithRequiredNeverSet'}));
-            await userEvent.click(screen.getByTestId('saveSetting'));
+            await userEvent.click(screen.getByTestId('admin.channel.save_panel.save--button'));
 
             expect(await screen.findByText('Set a value for Program before saving. This attribute is required.')).toBeInTheDocument();
             expect(unarchiveChannel).not.toHaveBeenCalled();
@@ -291,11 +291,11 @@ describe('admin_console/team_channel_settings/channel/ChannelDetails', () => {
 
             await userEvent.click(screen.getByRole('button', {name: 'Unarchive Channel'}));
             await userEvent.click(screen.getByRole('button', {name: 'EditWithRequiredNeverSet'}));
-            await userEvent.click(screen.getByTestId('saveSetting'));
+            await userEvent.click(screen.getByTestId('admin.channel.save_panel.save--button'));
             expect(await screen.findByText(/before saving/)).toBeInTheDocument();
 
             await userEvent.click(screen.getByRole('button', {name: 'FillRequiredAttribute'}));
-            await userEvent.click(screen.getByTestId('saveSetting'));
+            await userEvent.click(screen.getByTestId('admin.channel.save_panel.save--button'));
 
             await waitFor(() => expect(unarchiveChannel).toHaveBeenCalledWith(testChannel.id));
             await waitFor(() => expect(patchChannelAttributeValues).toHaveBeenCalledWith(testChannel.id, [{field_id: 'field1', value: 'value1'}]));
@@ -308,7 +308,7 @@ describe('admin_console/team_channel_settings/channel/ChannelDetails', () => {
             await userEvent.click(screen.getByRole('button', {name: 'EditChannelAttribute'}));
             await userEvent.click(screen.getByRole('button', {name: 'Archive Channel'}));
             await userEvent.click(screen.getByRole('button', {name: 'Unarchive Channel'}));
-            await userEvent.click(screen.getByTestId('saveSetting'));
+            await userEvent.click(screen.getByTestId('admin.channel.save_panel.save--button'));
 
             await waitFor(() => expect(patchChannel).toHaveBeenCalled());
             expect(patchChannelAttributeValues).not.toHaveBeenCalled();
@@ -318,7 +318,7 @@ describe('admin_console/team_channel_settings/channel/ChannelDetails', () => {
             const {patchChannelAttributeValues} = renderDetails(testChannel);
 
             await userEvent.click(screen.getByRole('button', {name: 'EditWithRequiredNeverSet'}));
-            await userEvent.click(screen.getByTestId('saveSetting'));
+            await userEvent.click(screen.getByTestId('admin.channel.save_panel.save--button'));
 
             await waitFor(() => expect(patchChannelAttributeValues).toHaveBeenCalledWith(testChannel.id, [{field_id: 'field2', value: 'value2'}]));
             expect(screen.queryByText(/before saving/)).not.toBeInTheDocument();
