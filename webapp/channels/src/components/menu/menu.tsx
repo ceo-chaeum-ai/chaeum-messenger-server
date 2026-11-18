@@ -632,6 +632,7 @@ function MenuModal(props: MenuModalProps) {
             <GenericModal
                 id={props.menuId}
                 className='menuModal'
+                testId='menu_modal'
                 backdrop={true}
                 ariaLabel={props.menuAriaLabel}
                 onExited={closeMenuModal}
@@ -640,6 +641,7 @@ function MenuModal(props: MenuModalProps) {
             >
                 <MuiMenuList // serves as backdrop for modals
                     component='div'
+                    data-testid='menu_modal.items'
                     aria-labelledby={props.menuButtonId}
                     onClick={handleModalClickCapture}
                     className={props.className}
