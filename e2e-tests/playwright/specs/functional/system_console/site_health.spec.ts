@@ -1,6 +1,8 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
+import {readFile} from 'node:fs/promises';
+
 import type {Client4} from '@mattermost/client';
 
 import {
@@ -673,4 +675,37 @@ test('hides Site health from admins without manage_system', {tag: '@system_conso
 
     // * Verify the findings API refuses them
     await expect(userClient.getHealthFindings()).rejects.toMatchObject({status_code: 403});
+});
+
+/**
+ * @objective Verify a system admin can download the Site health findings as an HTML report that is named
+ * after the site and the date and contains a known finding.
+ */
+test('downloads the Site health findings as HTML', {tag: '@system_console'}, async ({pw}) => {
+    await skipUnlessLicensed(pw, ENTERPRISE_TIER);
+
+    const {adminUser, adminClient} = await pw.initSetup();
+    await adminClient.patchConfig(LOG_WEBHOOK_PAYLOADS.fire);
+
+    const {app} = await pw.testBrowser.login(adminUser);
+    const siteHealth = siteHealthPage(app);
+
+    // # Open Site health and run the checks
+    await siteHealth.goto();
+    await siteHealth.runChecks();
+
+    // * Verify the finding is listed
+    await expect(siteHealth.rows(LOG_WEBHOOK_PAYLOADS.title)).toBeVisible();
+
+    // # Download the HTML export
+    await siteHealth.health.export.container.click();
+    const [download] = await Promise.all([
+        app.page.waitForEvent('download'),
+        siteHealth.health.export.htmlMenuItem.click(),
+    ]);
+
+    // * Verify the file name and that the report contains the finding
+    expect(download.suggestedFilename()).toMatch(/^mm_site_health_.+_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}\.html$/);
+    const html = await readFile(await download.path(), 'utf8');
+    expect(html).toContain(LOG_WEBHOOK_PAYLOADS.title);
 });

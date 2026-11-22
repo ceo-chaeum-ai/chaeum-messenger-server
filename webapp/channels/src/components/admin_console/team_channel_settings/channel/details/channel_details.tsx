@@ -1557,6 +1557,7 @@ export default class ChannelDetails extends React.PureComponent<ChannelDetailsPr
                                 onChange={this.handleChannelAttributeValuesChange}
                                 onMissingRequiredChange={this.handleMissingRequiredChannelAttributesChange}
                                 showRequiredErrors={this.state.showRequiredChannelAttributeErrors}
+                                testIdScope='admin.channel.attributes'
                             />
                         )}
                         {!isLocalArchived && nonArchivedContent}

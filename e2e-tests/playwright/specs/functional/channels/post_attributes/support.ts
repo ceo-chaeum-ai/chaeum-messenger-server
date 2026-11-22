@@ -8,7 +8,15 @@ import type {FieldType, PropertyField, PropertyPermissionLevel} from '@mattermos
 import type {Team} from '@mattermost/types/teams';
 import type {UserProfile} from '@mattermost/types/users';
 
-import {expect, ignoreMissing, type App, type generated, type PlaywrightExtended} from '@mattermost/playwright-lib';
+import {
+    Api,
+    expect,
+    ignoreMissing,
+    settle,
+    type App,
+    type generated,
+    type PlaywrightExtended,
+} from '@mattermost/playwright-lib';
 
 export const GROUP = 'post_attributes';
 export const OBJECT_TYPE = 'post';
@@ -375,4 +383,84 @@ export async function openModalFromPostMenu(
     await expect(post.menu.dotMenuButton).toBeVisible();
     const dotMenu = await post.menu.dotMenuButton.clickTo(app.postDotMenu);
     return dotMenu.postAttributesMenuItem.clickTo(app.postAttributesModal);
+}
+
+/** A composer: the centre channel's or the thread sidebar's. Both can be on screen at once. */
+export type Composer = App['center']['postCreate'] | App['rhs']['postCreate'];
+
+/**
+ * Stages a field by opening the `+` in the action row and choosing it from the picker. A select field's value menu
+ * opens by itself afterwards, and a text or user field's control takes focus.
+ */
+export async function stageField(composer: Composer, field: PropertyField) {
+    const button = composer.postAttributesButton;
+
+    await button.addButton.clickTo(button.addMenu);
+    await button.addMenu.field(field).clickTo(composer.postAttributes.chip(field));
+}
+
+/**
+ * Picks an option in the value menu a select or rank chip has open. The menu closes on the pick.
+ */
+export async function chooseOption(composer: Composer, field: PropertyField, name: string) {
+    const menu = composer.postAttributes.chip(field).attribute.valueMenu;
+
+    await menu.option(optionId(field, name)).click();
+    await expect(menu.container).toBeHidden();
+}
+
+/**
+ * Ticks an option in the value menu a multiselect chip has open. The menu stays open, so several can be ticked.
+ */
+export async function tickOption(composer: Composer, field: PropertyField, name: string) {
+    const option = composer.postAttributes.chip(field).attribute.valueMenu.option(optionId(field, name));
+
+    await option.click();
+    await expect(option).toHaveAttribute('aria-checked', 'true');
+}
+
+/**
+ * Types a value into a staged text chip and commits it with Enter, which rests the chip showing the value.
+ */
+export async function commitText(composer: Composer, field: PropertyField, value: string) {
+    const chip = composer.postAttributes.chip(field);
+
+    await chip.attribute.valueInputTextbox.fill(value);
+    await chip.attribute.valueInputTextbox.press('Enter');
+    await expect(chip.value.textText).toHaveText(value);
+}
+
+/**
+ * Writes a message in the composer and sends it, resolving to the values the create request carried and the post the
+ * server made.
+ */
+export async function sendMessage(page: Page, composer: Composer, message: string) {
+    await composer.message.container.fill(message);
+
+    const request = waitForCreatePost(page);
+    const post = await settle(composer.sendButton, {wait: Api.CreatePost}).click();
+
+    return {values: sentValues(await request), post};
+}
+
+/**
+ * Removes a staged chip with its ×, and waits for it to leave the row.
+ */
+export async function removeChip(composer: Composer, field: PropertyField) {
+    const chip = composer.postAttributes.chip(field);
+
+    await chip.removeButton.click();
+    await expect(chip.container).toHaveCount(0);
+}
+
+/**
+ * Opens a post's thread from the centre column by its Reply button, and waits for the post to show in the sidebar. The
+ * message text is hovered first, because the action row is hidden until the post is.
+ */
+export async function openThread(app: App, root: {id: string}) {
+    const post = app.center.postList.post(root);
+
+    await post.container.hover();
+    await post.menu.replyButton.click();
+    await expect(app.rhs.thread.post(root)).toBeVisible();
 }
