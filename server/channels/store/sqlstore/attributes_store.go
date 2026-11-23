@@ -321,6 +321,7 @@ func (s *SqlAttributesStore) ClearUserAttributesCache()              {}
 func (s *SqlAttributesStore) GetCachedUserSubject(userID string) (*model.Subject, bool) {
 	return nil, false
 }
+func (s *SqlAttributesStore) SetCachedUserSubject(subject *model.Subject) {}
 
 func (s *SqlAttributesStore) GetTeamMembersToRemove(rctx request.CTX, teamID string, opts model.SubjectSearchOptions) ([]*model.TeamMember, error) {
 	query := s.getQueryBuilder().

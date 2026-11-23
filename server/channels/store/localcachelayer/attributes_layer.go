@@ -106,6 +106,10 @@ func (s LocalCacheAttributesStore) GetCachedUserSubject(userID string) (*model.S
 	return &cached, true
 }
 
+func (s LocalCacheAttributesStore) SetCachedUserSubject(subject *model.Subject) {
+	s.rootStore.doStandardAddToCache(s.rootStore.userAttributesCache, subject.ID, subject)
+}
+
 func (s LocalCacheAttributesStore) InvalidateUserAttributes(userID string) {
 	s.rootStore.doInvalidateCacheCluster(s.rootStore.userAttributesCache, userID, nil)
 	if s.rootStore.metrics != nil {

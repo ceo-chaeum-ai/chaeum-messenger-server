@@ -4,6 +4,7 @@
 package app
 
 import (
+	"encoding/json"
 	"maps"
 	"net/http"
 	"slices"
@@ -42,10 +43,18 @@ func (a *App) pushClientConfigOverrides(rctx request.CTX, userID, sessionID stri
 	a.goPushClientConfigOverrides(userID, sessionID, force)
 }
 
-// A nil fieldIDs means the changed fields are unknown.
-func (a *App) pushClientConfigOverridesForUserAttributes(rctx request.CTX, userID string, fieldIDs []string) {
+// written holds the user's values as written, and is nil when the changed fields are unknown.
+// cached is the user's subject as cached before the write, or nil.
+func (a *App) pushClientConfigOverridesForUserAttributes(rctx request.CTX, userID string, cached *model.Subject, written []*model.PropertyValue) {
 	if userID == "" {
 		return
+	}
+	var fieldIDs []string
+	if written != nil {
+		fieldIDs = make([]string, 0, len(written))
+		for _, v := range written {
+			fieldIDs = append(fieldIDs, v.FieldID)
+		}
 	}
 	policies := a.systemSettingPoliciesForPush(rctx)
 	if !slices.ContainsFunc(policies, func(p cachedSystemSettingPolicy) bool {
@@ -53,7 +62,147 @@ func (a *App) pushClientConfigOverridesForUserAttributes(rctx request.CTX, userI
 	}) {
 		return
 	}
+	if written != nil {
+		a.cacheWrittenUserSubject(rctx, userID, cached, written)
+	}
 	a.goPushClientConfigOverrides(userID, "", false)
+}
+
+// cacheWrittenUserSubject caches the user's subject as the attribute view will read once it
+// is refreshed: the cached subject, or else the view's current row, with the values just
+// written projected and merged over it. The push then evaluates that subject instead of
+// refreshing the view, and a later write merges over this one. Run before the push, and
+// synchronously, so successive writes merge in order.
+//
+// The projection must match UserAttributeView's (migration 000223) for every field type, so
+// it changes with the view. A written value it can't project leaves the user uncached, and the
+// push reads the view as any evaluation does.
+func (a *App) cacheWrittenUserSubject(rctx request.CTX, userID string, cached *model.Subject, written []*model.PropertyValue) {
+	group, err := a.Srv().propertyService.Group(model.AccessControlPropertyGroupName)
+	if err != nil {
+		rctx.Logger().Warn("Failed to load the access control property group for an override push", mlog.Err(err))
+		return
+	}
+	fields, err := a.Srv().Store().PropertyField().GetForGroup(rctx, group.ID)
+	if err != nil {
+		rctx.Logger().Warn("Failed to load attribute fields for an override push", mlog.String("user_id", userID), mlog.Err(err))
+		return
+	}
+	fieldsByID := make(map[string]*model.PropertyField, len(fields))
+	for _, f := range fields {
+		fieldsByID[f.ID] = f
+	}
+
+	type projection struct {
+		value   any
+		deleted bool
+	}
+	projected := make(map[string]projection, len(written))
+	for _, v := range written {
+		if v.GroupID != group.ID {
+			continue
+		}
+		field, ok := fieldsByID[v.FieldID]
+		if !ok || model.PropertyFieldOptionsOmitted(field.Attrs) {
+			return
+		}
+		if field.ObjectType != model.PropertyFieldObjectTypeUser {
+			continue
+		}
+		if v.DeleteAt != 0 {
+			projected[field.Name] = projection{deleted: true}
+			continue
+		}
+
+		var raw any
+		if err := json.Unmarshal(v.Value, &raw); err != nil {
+			return
+		}
+		// GetForGroup hydrates the live options of the field and of the template it links to,
+		// which is the set the view resolves option IDs against.
+		options := map[string]map[string]any{}
+		list, _ := field.Attrs[model.PropertyFieldAttributeOptions].([]any)
+		for _, item := range list {
+			option, _ := item.(map[string]any)
+			if id, ok := option["id"].(string); ok {
+				if _, seen := options[id]; !seen {
+					options[id] = option
+				}
+			}
+		}
+		optionIDs, isArray := raw.([]any)
+
+		var value any
+		switch {
+		case field.Type == model.PropertyFieldTypeSelect || field.Type == model.PropertyFieldTypeRank:
+			id, _ := raw.(string)
+			option, ok := options[id]
+			if !ok {
+				break
+			}
+			if field.Type == model.PropertyFieldTypeSelect {
+				value = option["name"]
+			} else {
+				value = map[string]any{"name": option["name"], "rank": option["rank"]}
+			}
+		case field.Type == model.PropertyFieldTypeMultiselect && isArray:
+			var names []any
+			for _, item := range optionIDs {
+				id, _ := item.(string)
+				if option, ok := options[id]; ok {
+					names = append(names, option["name"])
+				}
+			}
+			if len(names) > 0 {
+				value = names
+			}
+		case field.Type == model.PropertyFieldTypeGraph:
+			ids := []any{}
+			for _, item := range optionIDs {
+				id, _ := item.(string)
+				if _, ok := options[id]; ok {
+					ids = append(ids, id)
+				}
+			}
+			value = ids
+		default:
+			value = raw
+		}
+		projected[field.Name] = projection{value: value}
+	}
+	if len(projected) == 0 && cached == nil {
+		return
+	}
+
+	var attributes map[string]any
+	if cached != nil {
+		attributes = cached.Attributes
+	} else {
+		subject, err := a.Srv().Store().Attributes().GetSubject(rctx, userID, group.ID, model.PropertyFieldObjectTypeUser)
+		if err != nil && !isNotFoundError(err) {
+			rctx.Logger().Warn("Failed to read attributes for an override push", mlog.String("user_id", userID), mlog.Err(err))
+			return
+		}
+		if subject != nil {
+			attributes = subject.Attributes
+		}
+	}
+	if attributes == nil {
+		attributes = make(map[string]any, len(projected))
+	}
+	for name, p := range projected {
+		if p.deleted {
+			delete(attributes, name)
+		} else {
+			attributes[name] = p.value
+		}
+	}
+
+	a.Srv().Store().Attributes().SetCachedUserSubject(&model.Subject{
+		ID:         userID,
+		Type:       model.PropertyFieldObjectTypeUser,
+		Attributes: attributes,
+	})
 }
 
 func (a *App) pushClientConfigOverridesForSessionAttributes(rctx request.CTX, userID, sessionID string, changed []string) {

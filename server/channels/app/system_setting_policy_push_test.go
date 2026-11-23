@@ -188,10 +188,9 @@ func TestClientConfigOverridesPush(t *testing.T) {
 		messages, _ := connect(t, th.BasicUser.Id)
 
 		th.App.invalidateUserPropertyValuesEpochs([]*model.PropertyValue{userValue(th.BasicUser.Id, unreadFieldID)})
-		th.App.invalidateUserPropertyValuesEpoch(model.PropertyFieldObjectTypeUser, th.BasicUser.Id, []string{unreadFieldID})
 		expectNothing(t, messages)
 
-		th.App.invalidateUserPropertyValuesEpoch(model.PropertyFieldObjectTypeUser, th.BasicUser.Id, nil)
+		th.App.invalidateUserPropertyValuesEpoch(model.PropertyFieldObjectTypeUser, th.BasicUser.Id)
 		expectOverrides(t, messages, biometricsOn)
 	})
 
@@ -235,7 +234,7 @@ func TestClientConfigOverridesPush(t *testing.T) {
 		enable(t, model.SystemAdminRoleId, readsDeptAndIP)
 		messages, _ := connect(t, th.BasicUser.Id)
 
-		th.App.invalidateUserPropertyValuesEpoch(model.PropertyFieldObjectTypeUser, th.BasicUser.Id, nil)
+		th.App.invalidateUserPropertyValuesEpoch(model.PropertyFieldObjectTypeUser, th.BasicUser.Id)
 		expectNothing(t, messages)
 
 		_, appErr := th.App.UpdateUserRoles(th.Context, th.BasicUser.Id, model.SystemUserRoleId, false)
@@ -1189,4 +1188,265 @@ func TestClientConfigOverridesPushCachesTheWrittenAttributes(t *testing.T) {
 	expectPushedValue(t, "b")
 	expectSystemSettingOverrides(t, messages, map[string]any{model.ClientConfigKeyMobileEnableBiometrics: "true"})
 	expectAccessCheckValue(t, "b")
+}
+
+type countingRefreshAttributeStore struct {
+	store.AttributesStore
+	refreshes atomic.Int32
+}
+
+func (s *countingRefreshAttributeStore) RefreshAttributes() error {
+	s.refreshes.Add(1)
+	return s.AttributesStore.RefreshAttributes()
+}
+
+type countingRefreshAttributesStore struct {
+	store.Store
+	attributes *countingRefreshAttributeStore
+}
+
+func (s *countingRefreshAttributesStore) Attributes() store.AttributesStore {
+	return s.attributes
+}
+
+// A push evaluates the subject as the view will read once it is refreshed, built from the
+// values just written rather than from a refresh, and a later write builds on that subject.
+func TestClientConfigOverridesPushBuildsSubjectFromWrittenValues(t *testing.T) {
+	th := Setup(t).InitBasic(t)
+	th.ConfigStore.SetReadOnlyFF(false)
+
+	originalStore := th.App.Srv().Store()
+	attributes := &countingRefreshAttributeStore{AttributesStore: originalStore.Attributes()}
+	th.App.Srv().SetStore(&countingRefreshAttributesStore{Store: originalStore, attributes: attributes})
+	t.Cleanup(func() { th.App.Srv().SetStore(originalStore) })
+
+	require.True(t, th.App.Srv().SetLicense(model.NewTestLicenseSKU(model.LicenseShortSkuEnterpriseAdvanced)))
+	th.App.UpdateConfig(func(cfg *model.Config) {
+		cfg.FeatureFlags.SystemSettingPolicies = true
+		cfg.AccessControlSettings.EnableAttributeBasedAccessControl = new(true)
+	})
+
+	group, appErr := th.App.GetPropertyGroup(th.Context, model.AccessControlPropertyGroupName)
+	require.Nil(t, appErr)
+
+	pushed := make(chan *model.Subject, 10)
+	mockACS := &mocks.AccessControlServiceInterface{}
+	mockACS.On("AccessEvaluation", mock.Anything, mock.Anything).Return(func(_ request.CTX, req model.AccessRequest) model.AccessDecision {
+		pushed <- &model.Subject{ID: req.Subject.ID, Attributes: maps.Clone(req.Subject.Attributes)}
+		return model.AccessDecision{Decision: true}
+	}, nil).Maybe()
+	th.App.Srv().Channels().AccessControl = mockACS
+	t.Cleanup(func() { th.App.Srv().Channels().AccessControl = nil })
+
+	policy := biometricsPolicy(`user.attributes.dept == "eng"`)
+	policy.ID = model.NewId()
+	policy.Version = model.AccessControlPolicyVersionV0_3
+	saved, err := originalStore.AccessControlPolicy().Save(th.Context, policy)
+	require.NoError(t, err)
+	th.App.invalidateSystemSettingPolicyCache()
+	t.Cleanup(func() {
+		_ = originalStore.AccessControlPolicy().Delete(th.Context, saved.ID)
+		th.App.invalidateSystemSettingPolicyCache()
+	})
+
+	expectPushed := func(t *testing.T, userID string) map[string]any {
+		t.Helper()
+		for {
+			select {
+			case subject := <-pushed:
+				if subject.ID == userID {
+					return subject.Attributes
+				}
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "timed out waiting for the push to evaluate")
+			}
+		}
+	}
+	refreshedViewAttributes := func(t *testing.T, userID string) map[string]any {
+		t.Helper()
+		require.NoError(t, th.SQLStore.Attributes().RefreshAttributes())
+		subject, err := th.SQLStore.Attributes().GetSubject(th.Context, userID, group.ID, model.PropertyFieldObjectTypeUser)
+		require.NoError(t, err)
+		return subject.Attributes
+	}
+	jsonValue := func(t *testing.T, v any) json.RawMessage {
+		t.Helper()
+		b, err := json.Marshal(v)
+		require.NoError(t, err)
+		return b
+	}
+
+	t.Run("successive writes and a deletion build on each other without a refresh", func(t *testing.T) {
+		createAppField := func(t *testing.T) *model.PropertyField {
+			t.Helper()
+			field, appErr := th.App.CreatePropertyField(th.Context, &model.PropertyField{
+				GroupID:    group.ID,
+				Name:       celSafeName(),
+				Type:       model.PropertyFieldTypeText,
+				ObjectType: model.PropertyFieldObjectTypeUser,
+				TargetType: string(model.PropertyFieldTargetLevelSystem),
+			}, false, "")
+			require.Nil(t, appErr)
+			return field
+		}
+		dept, site := createAppField(t), createAppField(t)
+		connectSystemSettingWebSocket(t, th, th.BasicUser.Id)
+		refreshes := attributes.refreshes.Load()
+
+		deptValue, appErr := th.App.CreatePropertyValue(th.Context, &model.PropertyValue{
+			GroupID:    group.ID,
+			FieldID:    dept.ID,
+			TargetType: model.PropertyFieldObjectTypeUser,
+			TargetID:   th.BasicUser.Id,
+			Value:      jsonValue(t, "eng"),
+		})
+		require.Nil(t, appErr)
+		assert.Equal(t, map[string]any{dept.Name: "eng"}, expectPushed(t, th.BasicUser.Id))
+
+		_, appErr = th.App.CreatePropertyValue(th.Context, &model.PropertyValue{
+			GroupID:    group.ID,
+			FieldID:    site.ID,
+			TargetType: model.PropertyFieldObjectTypeUser,
+			TargetID:   th.BasicUser.Id,
+			Value:      jsonValue(t, "hq"),
+		})
+		require.Nil(t, appErr)
+		assert.Equal(t, map[string]any{dept.Name: "eng", site.Name: "hq"}, expectPushed(t, th.BasicUser.Id))
+
+		appErr = th.App.DeletePropertyValue(th.Context, group.ID, deptValue.ID)
+		require.Nil(t, appErr)
+		assert.Equal(t, map[string]any{site.Name: "hq"}, expectPushed(t, th.BasicUser.Id))
+
+		assert.Equal(t, refreshes, attributes.refreshes.Load(), "no push should refresh the view")
+		assert.Equal(t, map[string]any{site.Name: "hq"}, refreshedViewAttributes(t, th.BasicUser.Id))
+	})
+
+	t.Run("the subject matches the refreshed view for every field type", func(t *testing.T) {
+		userID := th.BasicUser2.Id
+		// Created in the store, bypassing the app's type flags and option validation.
+		createField := func(t *testing.T, field *model.PropertyField) *model.PropertyField {
+			t.Helper()
+			field.GroupID = group.ID
+			field.Name = celSafeName()
+			if field.ObjectType == "" {
+				field.ObjectType = model.PropertyFieldObjectTypeUser
+			}
+			field.TargetType = string(model.PropertyFieldTargetLevelSystem)
+			created, err := th.App.Srv().Store().PropertyField().Create(field)
+			require.NoError(t, err)
+			return created
+		}
+		unknownOption := model.NewId()
+		option := func(name string) map[string]any {
+			return map[string]any{"id": model.NewId(), "name": name}
+		}
+		optionsAttrs := func(options ...map[string]any) model.StringInterface {
+			list := make([]any, 0, len(options))
+			for _, o := range options {
+				list = append(list, o)
+			}
+			return model.StringInterface{model.PropertyFieldAttributeOptions: list}
+		}
+
+		selectA, selectB := option("A"), option("B")
+		selectField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeSelect, Attrs: optionsAttrs(selectA, selectB)})
+		multiA, multiB := option("A"), option("B")
+		multiField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeMultiselect, Attrs: optionsAttrs(multiA, multiB)})
+		multiRawField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeMultiselect, Attrs: optionsAttrs(option("A"))})
+		low, high := option("Low"), option("High")
+		low["rank"], high["rank"] = 1, 2
+		rankField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeRank, Attrs: optionsAttrs(low, high)})
+		graphA, graphB := option("A"), option("B")
+		graphField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeGraph, Attrs: optionsAttrs(graphA, graphB)})
+		graphRawField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeGraph, Attrs: optionsAttrs(option("A"))})
+
+		templateA, templateB := option("TA"), option("TB")
+		templateSelect := createField(t, &model.PropertyField{
+			Type:       model.PropertyFieldTypeSelect,
+			ObjectType: model.PropertyFieldObjectTypeTemplate,
+			Attrs:      optionsAttrs(templateA, templateB),
+		})
+		linkedSelect := createField(t, &model.PropertyField{
+			Type:          model.PropertyFieldTypeSelect,
+			LinkedFieldID: &templateSelect.ID,
+			Attrs:         optionsAttrs(templateA, templateB),
+		})
+		templateMulti := createField(t, &model.PropertyField{
+			Type:       model.PropertyFieldTypeMultiselect,
+			ObjectType: model.PropertyFieldObjectTypeTemplate,
+			Attrs:      optionsAttrs(templateA, templateB),
+		})
+		linkedMulti := createField(t, &model.PropertyField{
+			Type:          model.PropertyFieldTypeMultiselect,
+			LinkedFieldID: &templateMulti.ID,
+			Attrs:         optionsAttrs(templateA, templateB),
+		})
+
+		textField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeText})
+		nullField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeText})
+		dateField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeDate})
+		numberField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeNumber})
+		checkboxField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeCheckbox})
+		userField := createField(t, &model.PropertyField{Type: model.PropertyFieldTypeUser})
+
+		connectSystemSettingWebSocket(t, th, userID)
+		refreshes := attributes.refreshes.Load()
+
+		// Written to the store directly, as the app write paths do, so the values can name
+		// options that don't exist; then handed to the invalidation as the write paths do.
+		write := func(t *testing.T, values map[*model.PropertyField]any) map[string]any {
+			t.Helper()
+			written := make([]*model.PropertyValue, 0, len(values))
+			for field, v := range values {
+				written = append(written, &model.PropertyValue{
+					GroupID:    group.ID,
+					FieldID:    field.ID,
+					TargetType: model.PropertyFieldObjectTypeUser,
+					TargetID:   userID,
+					Value:      jsonValue(t, v),
+				})
+			}
+			written, err := th.App.Srv().Store().PropertyValue().Upsert(written)
+			require.NoError(t, err)
+			th.App.invalidateUserPropertyValuesEpochs(written)
+
+			cached, ok := th.App.Srv().Store().Attributes().GetCachedUserSubject(userID)
+			require.True(t, ok, "the push should cache the subject it builds")
+			assert.Equal(t, cached.Attributes, expectPushed(t, userID))
+			return cached.Attributes
+		}
+
+		cached := write(t, map[*model.PropertyField]any{
+			selectField:   selectB["id"],
+			multiField:    []any{multiB["id"], unknownOption, multiA["id"]},
+			multiRawField: "not an array",
+			rankField:     high["id"],
+			graphField:    []any{graphB["id"], unknownOption},
+			graphRawField: "not an array",
+			linkedSelect:  templateB["id"],
+			linkedMulti:   []any{templateB["id"], templateA["id"]},
+			textField:     "text",
+			nullField:     nil,
+			dateField:     1700000000000,
+			numberField:   42.5,
+			checkboxField: true,
+			userField:     th.BasicUser.Id,
+		})
+		assert.Equal(t, refreshes, attributes.refreshes.Load(), "the push should not refresh the view")
+		assert.Equal(t, refreshedViewAttributes(t, userID), cached)
+
+		// The cached subject is the base for the next write, which covers the options that
+		// resolve to nothing.
+		refreshes = attributes.refreshes.Load()
+		cached = write(t, map[*model.PropertyField]any{
+			selectField:  unknownOption,
+			multiField:   []any{unknownOption},
+			rankField:    unknownOption,
+			graphField:   []any{unknownOption},
+			linkedSelect: unknownOption,
+			textField:    "changed",
+		})
+		assert.Equal(t, refreshes, attributes.refreshes.Load(), "the push should not refresh the view")
+		assert.Equal(t, refreshedViewAttributes(t, userID), cached)
+	})
 }

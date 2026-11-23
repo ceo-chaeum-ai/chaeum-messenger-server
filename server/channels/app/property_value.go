@@ -40,19 +40,20 @@ func (a *App) resolveValueBroadcastParams(rctx request.CTX, objectType, targetID
 // invalidateUserPropertyValuesEpochs marks the AttributeView stale and drops the cached CPA epoch
 // for every distinct user the values target. It keys off each value's own TargetType/TargetID
 // rather than a caller-supplied object type, to stay correct for plugin callers that pass none.
+// The values are the rows as written; a deleted one carries its DeleteAt.
 //
 // Both halves must move together: the epoch alone forces a refetch that renders from a stale view
 // and then caches that under the new ETag, and the view alone leaves the client 304ing on content
 // sanitized under the old attributes.
 func (a *App) invalidateUserPropertyValuesEpochs(values []*model.PropertyValue) {
-	fieldIDsByTarget := make(map[string][]string, len(values))
+	valuesByTarget := make(map[string][]*model.PropertyValue, len(values))
 	for _, v := range values {
 		if v == nil || v.TargetType != model.PropertyFieldObjectTypeUser {
 			continue
 		}
-		fieldIDsByTarget[v.TargetID] = append(fieldIDsByTarget[v.TargetID], v.FieldID)
+		valuesByTarget[v.TargetID] = append(valuesByTarget[v.TargetID], v)
 	}
-	if len(fieldIDsByTarget) == 0 {
+	if len(valuesByTarget) == 0 {
 		return
 	}
 
@@ -65,17 +66,17 @@ func (a *App) invalidateUserPropertyValuesEpochs(values []*model.PropertyValue) 
 		return
 	}
 	rctx := request.EmptyContext(a.Log())
-	for targetID, fieldIDs := range fieldIDsByTarget {
+	for targetID, written := range valuesByTarget {
 		a.Srv().Store().Attributes().InvalidateUserPropertyValuesEpoch(targetID)
+		cached, _ := a.Srv().Store().Attributes().GetCachedUserSubject(targetID)
 		a.Srv().Store().Attributes().InvalidateUserAttributes(targetID)
-		a.pushClientConfigOverridesForUserAttributes(rctx, targetID, fieldIDs)
+		a.pushClientConfigOverridesForUserAttributes(rctx, targetID, cached, written)
 	}
 }
 
-// invalidateUserPropertyValuesEpoch is the single-target form, for delete paths that have a target
-// ID rather than a set of values. Same split gate as above. fieldIDs names the fields whose values
-// were deleted, or is nil when every field of the target was.
-func (a *App) invalidateUserPropertyValuesEpoch(targetType, targetID string, fieldIDs []string) {
+// invalidateUserPropertyValuesEpoch is the single-target form, for deleting every value of a
+// target, where there is no set of values. Same split gate as above.
+func (a *App) invalidateUserPropertyValuesEpoch(targetType, targetID string) {
 	if targetType != model.PropertyFieldObjectTypeUser {
 		return
 	}
@@ -87,7 +88,7 @@ func (a *App) invalidateUserPropertyValuesEpoch(targetType, targetID string, fie
 	}
 	a.Srv().Store().Attributes().InvalidateUserPropertyValuesEpoch(targetID)
 	a.Srv().Store().Attributes().InvalidateUserAttributes(targetID)
-	a.pushClientConfigOverridesForUserAttributes(request.EmptyContext(a.Log()), targetID, fieldIDs)
+	a.pushClientConfigOverridesForUserAttributes(request.EmptyContext(a.Log()), targetID, nil, nil)
 }
 
 // invalidateAllUserAttributeCaches marks the AttributeView stale and drops every cached CPA epoch.
@@ -432,7 +433,9 @@ func (a *App) DeletePropertyValue(rctx request.CTX, groupID, valueID string) *mo
 		return model.NewAppError("DeletePropertyValue", "app.property_value.delete.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
 	}
 
-	a.invalidateUserPropertyValuesEpoch(value.TargetType, value.TargetID, []string{value.FieldID})
+	deletedValue := *value
+	deletedValue.DeleteAt = model.GetMillis()
+	a.invalidateUserPropertyValuesEpochs([]*model.PropertyValue{&deletedValue})
 	a.runPropertyValuesHaveBeenUpdatedHook(rctx, groupID, nil, previous)
 
 	teamID, channelID, appErr := a.resolveValueBroadcastParams(rctx, value.TargetType, value.TargetID)
@@ -475,7 +478,7 @@ func (a *App) DeletePropertyValuesForTarget(rctx request.CTX, groupID, targetTyp
 		return model.NewAppError("DeletePropertyValuesForTarget", "app.property_value.delete_for_target.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
 	}
 
-	a.invalidateUserPropertyValuesEpoch(targetType, targetID, nil)
+	a.invalidateUserPropertyValuesEpoch(targetType, targetID)
 	a.runPropertyValuesHaveBeenUpdatedHook(rctx, groupID, nil, previous)
 
 	teamID, channelID, appErr := a.resolveValueBroadcastParams(rctx, targetType, targetID)

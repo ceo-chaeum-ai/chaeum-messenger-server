@@ -1028,6 +1028,21 @@ func (s *TimerLayerAttributesStore) SearchUsers(rctx request.CTX, opts model.Sub
 	return result, resultVar1, err
 }
 
+func (s *TimerLayerAttributesStore) SetCachedUserSubject(subject *model.Subject) {
+	start := time.Now()
+
+	s.AttributesStore.SetCachedUserSubject(subject)
+
+	elapsed := float64(time.Since(start)) / float64(time.Second)
+	if s.Root.Metrics != nil {
+		success := "false"
+		if true {
+			success = "true"
+		}
+		s.Root.Metrics.ObserveStoreMethodDuration("AttributesStore.SetCachedUserSubject", success, elapsed)
+	}
+}
+
 func (s *TimerLayerAuditStore) Get(userID string, offset int, limit int) (model.Audits, error) {
 	start := time.Now()
 

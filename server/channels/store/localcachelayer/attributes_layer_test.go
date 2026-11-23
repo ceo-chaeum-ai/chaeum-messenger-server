@@ -187,4 +187,29 @@ func TestAttributesStoreCache(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "Engineering", second.Attributes["department"])
 	})
+
+	t.Run("SetCachedUserSubject is read back without a query", func(t *testing.T) {
+		mockStore := getMockStore(t)
+		cachedStore, err := NewLocalCacheLayer(mockStore, nil, nil, getMockCacheProvider(), logger)
+		require.NoError(t, err)
+
+		cachedStore.Attributes().SetCachedUserSubject(&model.Subject{
+			ID:         userID,
+			Type:       model.PropertyFieldObjectTypeUser,
+			Attributes: map[string]any{"department": "Sales"},
+		})
+
+		subject, ok := cachedStore.Attributes().GetCachedUserSubject(userID)
+		require.True(t, ok)
+		assert.Equal(t, "Sales", subject.Attributes["department"])
+
+		subject, err = cachedStore.Attributes().GetSubject(rctx, userID, groupID, model.PropertyFieldObjectTypeUser)
+		require.NoError(t, err)
+		assert.Equal(t, "Sales", subject.Attributes["department"])
+		mockStore.Attributes().(*mocks.AttributesStore).AssertNotCalled(t, "GetSubject", rctx, userID, groupID, model.PropertyFieldObjectTypeUser)
+
+		cachedStore.Attributes().InvalidateUserAttributes(userID)
+		_, ok = cachedStore.Attributes().GetCachedUserSubject(userID)
+		require.False(t, ok)
+	})
 }

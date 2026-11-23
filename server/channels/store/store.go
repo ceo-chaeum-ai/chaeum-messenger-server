@@ -1416,6 +1416,10 @@ type AttributesStore interface {
 	// attribute view, and false when it is not cached. Always false outside the local cache
 	// layer.
 	GetCachedUserSubject(userID string) (*model.Subject, bool)
+
+	// SetCachedUserSubject caches subject as the user-attributes Subject of the user subject.ID,
+	// as GetSubject caches what it reads. No-op outside the local cache layer.
+	SetCachedUserSubject(subject *model.Subject)
 }
 
 type SessionAttributeStore interface {

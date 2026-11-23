@@ -238,6 +238,11 @@ func (_m *AttributesStore) SearchUsers(rctx request.CTX, opts model.SubjectSearc
 	return r0, r1, r2
 }
 
+// SetCachedUserSubject provides a mock function with given fields: subject
+func (_m *AttributesStore) SetCachedUserSubject(subject *model.Subject) {
+	_m.Called(subject)
+}
+
 // NewAttributesStore creates a new instance of AttributesStore. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewAttributesStore(t interface {

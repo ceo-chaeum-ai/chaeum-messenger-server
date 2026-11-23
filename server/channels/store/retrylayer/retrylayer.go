@@ -1061,6 +1061,12 @@ func (s *RetryLayerAttributesStore) SearchUsers(rctx request.CTX, opts model.Sub
 
 }
 
+func (s *RetryLayerAttributesStore) SetCachedUserSubject(subject *model.Subject) {
+
+	s.AttributesStore.SetCachedUserSubject(subject)
+
+}
+
 func (s *RetryLayerAuditStore) Get(userID string, offset int, limit int) (model.Audits, error) {
 
 	tries := 0
