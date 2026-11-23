@@ -4,9 +4,11 @@
 package storetest
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/request"
@@ -219,6 +221,41 @@ func testAttributesStoreRefresh(t *testing.T, rctx request.CTX, ss store.Store) 
 			require.Equal(t, user.Id, subject.ID)
 			require.Equal(t, "user", subject.Type)
 		}
+	})
+
+	t.Run("Refresh does not block readers", func(t *testing.T) {
+		require.NoError(t, ss.Attributes().RefreshAttributes())
+
+		// The refresh locks the view it is refreshing before it reads PropertyValues, so holding
+		// PropertyValues stalls it with that lock held.
+		tx, err := ss.GetInternalMasterDB().Begin()
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback() }()
+		_, err = tx.Exec("LOCK TABLE PropertyValues IN ACCESS EXCLUSIVE MODE")
+		require.NoError(t, err)
+
+		refreshed := make(chan error, 1)
+		go func() { refreshed <- ss.Attributes().RefreshAttributes() }()
+		require.Eventually(t, func() bool {
+			var waiting int
+			scanErr := ss.GetInternalMasterDB().QueryRow(`SELECT COUNT(*) FROM pg_stat_activity
+				WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'REFRESH MATERIALIZED VIEW%'`).Scan(&waiting)
+			return scanErr == nil && waiting > 0
+		}, 10*time.Second, 10*time.Millisecond, "the refresh should be waiting on PropertyValues")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		readCtx := rctx.WithContext(ctx)
+
+		subject, err := ss.Attributes().GetSubject(readCtx, users[0].Id, groupID, model.PropertyFieldObjectTypeUser)
+		require.NoError(t, err, "a user subject read should not wait for the refresh")
+		require.Equal(t, testPropertyValueA1, subject.Attributes[testPropertyA])
+
+		_, err = ss.Attributes().GetSubject(readCtx, model.NewId(), groupID, model.PropertyFieldObjectTypeChannel)
+		require.IsType(t, &store.ErrNotFound{}, err, "a channel subject read should not wait for the refresh")
+
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, <-refreshed)
 	})
 
 	t.Run("Get non-existing subject", func(t *testing.T) {

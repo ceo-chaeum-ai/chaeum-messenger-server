@@ -3138,15 +3138,16 @@ func (a *App) invalidateAttributeViewCache() {
 }
 
 // refreshAttributeViewIfStale refreshes the attribute materialized views if the
-// last refresh was more than attributeViewRefreshInterval ago. The refresh is
-// non-blocking: if another goroutine is already refreshing, this call returns
-// immediately.
+// last refresh was more than attributeViewRefreshInterval ago. If another
+// goroutine is already refreshing, this call waits for that refresh to finish,
+// then refreshes again only if a write landed during it.
 func (a *App) refreshAttributeViewIfStale(rctx request.CTX) {
 	ch := a.Srv().Channels()
 
-	if !ch.attributeViewRefreshMut.TryLock() {
-		return
-	}
+	// The views refresh concurrently, so a caller that didn't wait out an
+	// in-flight refresh would read the previous contents, and cache a row that
+	// predates writes the refresh already includes.
+	ch.attributeViewRefreshMut.Lock()
 	defer ch.attributeViewRefreshMut.Unlock()
 
 	needsRefresh := ch.attributeViewNeedsRefresh.Swap(false)

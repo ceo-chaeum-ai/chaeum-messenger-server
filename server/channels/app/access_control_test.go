@@ -6557,6 +6557,54 @@ func TestInvalidateAttributeViewCache(t *testing.T) {
 	require.True(t, ch.attributeViewNeedsRefresh.Load(), "a write during a refresh should flag a follow-up")
 }
 
+func TestRefreshAttributeViewIfStaleWaitsForInFlightRefresh(t *testing.T) {
+	// Holds the refresh lock as an in-flight refresh would, starts a caller, and finishes
+	// the refresh after checking that the caller waits for it.
+	waitOutRefresh := func(t *testing.T, writeDuringRefresh bool) *storemocks.AttributesStore {
+		t.Helper()
+		th := SetupWithStoreMock(t)
+		ch := th.App.Srv().Channels()
+		mockAttributes := &storemocks.AttributesStore{}
+		mockAttributes.On("RefreshAttributes").Return(nil).Maybe()
+		th.App.Srv().Store().(*storemocks.Store).On("Attributes").Return(mockAttributes).Maybe()
+
+		ch.attributeViewRefreshMut.Lock()
+		done := make(chan struct{})
+		go func() {
+			th.App.refreshAttributeViewIfStale(th.Context)
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			require.Fail(t, "returned while a refresh was in flight")
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		if writeDuringRefresh {
+			th.App.invalidateAttributeViewCache()
+		}
+		ch.attributeViewRefreshLast = time.Now()
+		ch.attributeViewRefreshMut.Unlock()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "did not return once the in-flight refresh finished")
+		}
+		return mockAttributes
+	}
+
+	t.Run("reads the refreshed view without refreshing again", func(t *testing.T) {
+		mockAttributes := waitOutRefresh(t, false)
+		mockAttributes.AssertNotCalled(t, "RefreshAttributes")
+	})
+
+	t.Run("refreshes again for a write that landed during the refresh", func(t *testing.T) {
+		mockAttributes := waitOutRefresh(t, true)
+		mockAttributes.AssertNumberOfCalls(t, "RefreshAttributes", 1)
+	})
+}
+
 func TestBuildAccessControlSubjectRefreshesViewOnCacheMiss(t *testing.T) {
 	th := Setup(t).InitBasic(t)
 	th.App.Srv().SetLicense(model.NewTestLicenseSKU(model.LicenseShortSkuEnterpriseAdvanced))

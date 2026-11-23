@@ -94,8 +94,13 @@ func (s *SqlAttributesStore) RefreshAttributes() error {
 	// whose attributes actually changed is a scale follow-up. Refresh order is
 	// unspecified (map iteration) and does not matter: each REFRESH is its own
 	// independent statement.
+	//
+	// CONCURRENTLY, so readers keep reading the previous contents rather than
+	// waiting out the refresh. It needs a unique index with no WHERE clause on
+	// each view (000244, 000245) and a populated view, which every view is: none
+	// is created WITH NO DATA.
 	for _, view := range attributeViewsByObjectType {
-		if _, err := s.GetMaster().Exec("REFRESH MATERIALIZED VIEW " + view); err != nil {
+		if _, err := s.GetMaster().Exec("REFRESH MATERIALIZED VIEW CONCURRENTLY " + view); err != nil {
 			return errors.Wrapf(err, "error refreshing materialized view %s", view)
 		}
 	}
