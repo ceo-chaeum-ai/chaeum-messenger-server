@@ -152,6 +152,28 @@ func TestAttributesStoreCache(t *testing.T) {
 		mockStore.Attributes().(*mocks.AttributesStore).AssertNumberOfCalls(t, "GetSubject", 2)
 	})
 
+	t.Run("GetCachedUserSubject reads only the cache", func(t *testing.T) {
+		mockStore := getMockStore(t)
+		cachedStore, err := NewLocalCacheLayer(mockStore, nil, nil, getMockCacheProvider(), logger)
+		require.NoError(t, err)
+
+		_, ok := cachedStore.Attributes().GetCachedUserSubject(userID)
+		require.False(t, ok)
+		mockStore.Attributes().(*mocks.AttributesStore).AssertNotCalled(t, "GetSubject", rctx, userID, groupID, model.PropertyFieldObjectTypeUser)
+
+		_, err = cachedStore.Attributes().GetSubject(rctx, userID, groupID, model.PropertyFieldObjectTypeUser)
+		require.NoError(t, err)
+
+		subject, ok := cachedStore.Attributes().GetCachedUserSubject(userID)
+		require.True(t, ok)
+		assert.Equal(t, "Engineering", subject.Attributes["department"])
+		mockStore.Attributes().(*mocks.AttributesStore).AssertNumberOfCalls(t, "GetSubject", 1)
+
+		cachedStore.Attributes().InvalidateUserAttributes(userID)
+		_, ok = cachedStore.Attributes().GetCachedUserSubject(userID)
+		require.False(t, ok)
+	})
+
 	t.Run("GetSubject returns a clone of the cached attributes map", func(t *testing.T) {
 		mockStore := getMockStore(t)
 		cachedStore, err := NewLocalCacheLayer(mockStore, nil, nil, getMockCacheProvider(), logger)

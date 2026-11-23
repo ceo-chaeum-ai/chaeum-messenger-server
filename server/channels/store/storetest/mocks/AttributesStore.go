@@ -25,6 +25,36 @@ func (_m *AttributesStore) ClearUserPropertyValuesEpochCache() {
 	_m.Called()
 }
 
+// GetCachedUserSubject provides a mock function with given fields: userID
+func (_m *AttributesStore) GetCachedUserSubject(userID string) (*model.Subject, bool) {
+	ret := _m.Called(userID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetCachedUserSubject")
+	}
+
+	var r0 *model.Subject
+	var r1 bool
+	if rf, ok := ret.Get(0).(func(string) (*model.Subject, bool)); ok {
+		return rf(userID)
+	}
+	if rf, ok := ret.Get(0).(func(string) *model.Subject); ok {
+		r0 = rf(userID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*model.Subject)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(string) bool); ok {
+		r1 = rf(userID)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+
+	return r0, r1
+}
+
 // GetChannelMembersToRemove provides a mock function with given fields: rctx, channelID, opts
 func (_m *AttributesStore) GetChannelMembersToRemove(rctx request.CTX, channelID string, opts model.SubjectSearchOptions) ([]*model.ChannelMember, error) {
 	ret := _m.Called(rctx, channelID, opts)

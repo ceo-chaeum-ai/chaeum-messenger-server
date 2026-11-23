@@ -2884,8 +2884,8 @@ func (a *App) ValidateExpressionAgainstRequester(rctx request.CTX, expression st
 }
 
 // BuildAccessControlSubject creates a fully populated Subject with user attributes and
-// scoped roles for use in AccessEvaluation calls. It also ensures the materialized
-// attribute view is refreshed periodically (at most once per attributeViewRefreshInterval).
+// scoped roles for use in AccessEvaluation calls. When the user's attributes are not cached,
+// it refreshes the materialized attribute view if stale before reading it.
 //
 // channelID is optional: when non-empty, the channel-scoped role for the user is resolved
 // from ChannelMember and appended to Subject.ScopedRoles so v0.4 channel resource policy
@@ -2894,8 +2894,6 @@ func (a *App) ValidateExpressionAgainstRequester(rctx request.CTX, expression st
 //
 // Team join evaluations pass channelID="" — no channel role exists at join time.
 func (a *App) BuildAccessControlSubject(rctx request.CTX, userID string, roles string, channelID string) (*model.Subject, *model.AppError) {
-	a.refreshAttributeViewIfStale(rctx)
-
 	// Group is the cached lookup; GetPropertyGroup reads the store on every call,
 	// and subjects are built on hot paths such as websocket delivery.
 	group, err := a.Srv().propertyService.Group(model.AccessControlPropertyGroupName)
@@ -2903,22 +2901,30 @@ func (a *App) BuildAccessControlSubject(rctx request.CTX, userID string, roles s
 		return nil, model.NewAppError("BuildAccessControlSubject", "app.access_control.build_subject.group_id.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
 	}
 
-	subject, storeErr := a.Srv().Store().Attributes().GetSubject(rctx, userID, group.ID, model.PropertyFieldObjectTypeUser)
-	if storeErr != nil {
-		if _, ok := errors.AsType[*store.ErrNotFound](storeErr); ok {
-			subject = &model.Subject{
-				ID:         userID,
-				Type:       "user",
-				Attributes: map[string]any{},
-				Session:    map[string]any{},
+	// Only a read that misses the cache reaches the view, so only it pays for the refresh; a
+	// miss must refresh first, or a read right after a write would cache the pre-write row.
+	subject, cached := a.Srv().Store().Attributes().GetCachedUserSubject(userID)
+	if !cached {
+		a.refreshAttributeViewIfStale(rctx)
+
+		var storeErr error
+		subject, storeErr = a.Srv().Store().Attributes().GetSubject(rctx, userID, group.ID, model.PropertyFieldObjectTypeUser)
+		if storeErr != nil {
+			if _, ok := errors.AsType[*store.ErrNotFound](storeErr); ok {
+				subject = &model.Subject{
+					ID:         userID,
+					Type:       "user",
+					Attributes: map[string]any{},
+					Session:    map[string]any{},
+				}
+			} else {
+				rctx.Logger().Warn("Failed to get subject for access control subject",
+					mlog.String("user_id", userID),
+					mlog.String("roles", roles),
+					mlog.Err(storeErr),
+				)
+				return nil, model.NewAppError("BuildAccessControlSubject", "app.access_control.build_subject.get_subject.app_error", nil, "", http.StatusInternalServerError).Wrap(storeErr)
 			}
-		} else {
-			rctx.Logger().Warn("Failed to get subject for access control subject",
-				mlog.String("user_id", userID),
-				mlog.String("roles", roles),
-				mlog.Err(storeErr),
-			)
-			return nil, model.NewAppError("BuildAccessControlSubject", "app.access_control.build_subject.get_subject.app_error", nil, "", http.StatusInternalServerError).Wrap(storeErr)
 		}
 	}
 

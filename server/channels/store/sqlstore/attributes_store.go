@@ -313,6 +313,9 @@ func (s *SqlAttributesStore) ClearUserPropertyValuesEpochCache()              {}
 // cache layer.
 func (s *SqlAttributesStore) InvalidateUserAttributes(userID string) {}
 func (s *SqlAttributesStore) ClearUserAttributesCache()              {}
+func (s *SqlAttributesStore) GetCachedUserSubject(userID string) (*model.Subject, bool) {
+	return nil, false
+}
 
 func (s *SqlAttributesStore) GetTeamMembersToRemove(rctx request.CTX, teamID string, opts model.SubjectSearchOptions) ([]*model.TeamMember, error) {
 	query := s.getQueryBuilder().

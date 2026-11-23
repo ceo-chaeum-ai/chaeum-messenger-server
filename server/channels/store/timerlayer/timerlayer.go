@@ -870,6 +870,22 @@ func (s *TimerLayerAttributesStore) ClearUserPropertyValuesEpochCache() {
 	}
 }
 
+func (s *TimerLayerAttributesStore) GetCachedUserSubject(userID string) (*model.Subject, bool) {
+	start := time.Now()
+
+	result, resultVar1 := s.AttributesStore.GetCachedUserSubject(userID)
+
+	elapsed := float64(time.Since(start)) / float64(time.Second)
+	if s.Root.Metrics != nil {
+		success := "false"
+		if true {
+			success = "true"
+		}
+		s.Root.Metrics.ObserveStoreMethodDuration("AttributesStore.GetCachedUserSubject", success, elapsed)
+	}
+	return result, resultVar1
+}
+
 func (s *TimerLayerAttributesStore) GetChannelMembersToRemove(rctx request.CTX, channelID string, opts model.SubjectSearchOptions) ([]*model.ChannelMember, error) {
 	start := time.Now()
 

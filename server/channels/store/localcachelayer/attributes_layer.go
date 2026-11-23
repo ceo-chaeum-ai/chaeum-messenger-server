@@ -80,11 +80,8 @@ func (s LocalCacheAttributesStore) GetSubject(rctx request.CTX, ID, groupID, obj
 		return s.AttributesStore.GetSubject(rctx, ID, groupID, objectType)
 	}
 
-	var cached model.Subject
-	if err := s.rootStore.doStandardReadCache(s.rootStore.userAttributesCache, ID, &cached); err == nil {
-		// Clone so the caller cannot mutate the shared cached copy.
-		cached.Attributes = maps.Clone(cached.Attributes)
-		return &cached, nil
+	if cached, ok := s.GetCachedUserSubject(ID); ok {
+		return cached, nil
 	}
 
 	subject, err := s.AttributesStore.GetSubject(rctx, ID, groupID, objectType)
@@ -97,6 +94,16 @@ func (s LocalCacheAttributesStore) GetSubject(rctx request.CTX, ID, groupID, obj
 
 	s.rootStore.doStandardAddToCache(s.rootStore.userAttributesCache, ID, subject)
 	return subject, nil
+}
+
+func (s LocalCacheAttributesStore) GetCachedUserSubject(userID string) (*model.Subject, bool) {
+	var cached model.Subject
+	if err := s.rootStore.doStandardReadCache(s.rootStore.userAttributesCache, userID, &cached); err != nil {
+		return nil, false
+	}
+	// Clone so the caller cannot mutate the shared cached copy.
+	cached.Attributes = maps.Clone(cached.Attributes)
+	return &cached, true
 }
 
 func (s LocalCacheAttributesStore) InvalidateUserAttributes(userID string) {

@@ -1409,6 +1409,11 @@ type AttributesStore interface {
 	// that can affect many users at once (e.g. deleting a field). No-op outside the local cache
 	// layer.
 	ClearUserAttributesCache()
+
+	// GetCachedUserSubject returns the cached user-attributes Subject without reading the
+	// attribute view, and false when it is not cached. Always false outside the local cache
+	// layer.
+	GetCachedUserSubject(userID string) (*model.Subject, bool)
 }
 
 type SessionAttributeStore interface {

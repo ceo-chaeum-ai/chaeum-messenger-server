@@ -4,6 +4,7 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
@@ -6554,6 +6555,57 @@ func TestInvalidateAttributeViewCache(t *testing.T) {
 	ch.attributeViewRefreshMut.Unlock()
 	require.False(t, ch.attributeViewRefreshLast.IsZero())
 	require.True(t, ch.attributeViewNeedsRefresh.Load(), "a write during a refresh should flag a follow-up")
+}
+
+func TestBuildAccessControlSubjectRefreshesViewOnCacheMiss(t *testing.T) {
+	th := Setup(t).InitBasic(t)
+	th.App.Srv().SetLicense(model.NewTestLicenseSKU(model.LicenseShortSkuEnterpriseAdvanced))
+	th.ConfigStore.SetReadOnlyFF(false)
+	th.App.UpdateConfig(func(cfg *model.Config) {
+		cfg.AccessControlSettings.EnableAttributeBasedAccessControl = new(true)
+		cfg.FeatureFlags.PermissionPolicies = true
+	})
+	ch := th.App.Srv().Channels()
+
+	group, appErr := th.App.GetPropertyGroup(th.Context, model.AccessControlPropertyGroupName)
+	require.Nil(t, appErr)
+	field := &model.PropertyField{
+		GroupID:    group.ID,
+		Name:       "Department",
+		Type:       model.PropertyFieldTypeText,
+		ObjectType: model.PropertyFieldObjectTypeUser,
+		TargetType: string(model.PropertyFieldTargetLevelSystem),
+	}
+	field.Permissions = model.PermissionsFromLegacy(field, model.LegacyConversionOpts{})
+	field, err := th.App.Srv().Store().PropertyField().Create(field)
+	require.NoError(t, err)
+
+	setDepartment := func(department string) {
+		_, appErr := th.App.UpsertPropertyValue(th.Context, &model.PropertyValue{
+			GroupID:    group.ID,
+			FieldID:    field.ID,
+			TargetID:   th.BasicUser.Id,
+			TargetType: model.PropertyFieldObjectTypeUser,
+			Value:      json.RawMessage(`"` + department + `"`),
+		})
+		require.Nil(t, appErr)
+	}
+	department := func() any {
+		subject, appErr := th.App.BuildAccessControlSubject(th.Context, th.BasicUser.Id, th.BasicUser.Roles, "")
+		require.Nil(t, appErr)
+		return subject.Attributes["Department"]
+	}
+
+	setDepartment("a")
+	require.Equal(t, "a", department())
+
+	th.App.invalidateAttributeViewCache()
+	require.Equal(t, "a", department())
+	require.True(t, ch.attributeViewRefreshLast.IsZero(), "a cache hit must not refresh the view")
+
+	setDepartment("b")
+	require.Equal(t, "b", department(), "a miss after a write must read the refreshed view")
+	require.False(t, ch.attributeViewRefreshLast.IsZero())
 }
 
 func TestAttributeBasedAccessControlEnabled(t *testing.T) {

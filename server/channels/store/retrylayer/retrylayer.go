@@ -896,6 +896,12 @@ func (s *RetryLayerAttributesStore) ClearUserPropertyValuesEpochCache() {
 
 }
 
+func (s *RetryLayerAttributesStore) GetCachedUserSubject(userID string) (*model.Subject, bool) {
+
+	return s.AttributesStore.GetCachedUserSubject(userID)
+
+}
+
 func (s *RetryLayerAttributesStore) GetChannelMembersToRemove(rctx request.CTX, channelID string, opts model.SubjectSearchOptions) ([]*model.ChannelMember, error) {
 
 	tries := 0
