@@ -157,7 +157,7 @@ func (s *SqlPostStore) SaveMultiple(rctx request.CTX, posts []*model.Post) ([]*m
 			return nil, idx, store.NewErrInvalidInput("Post", "id", post.Id)
 		}
 		post.PreSave()
-		maxPostSize := s.GetMaxPostSize()
+		maxPostSize := storedSizeLimit(s.GetMaxPostSize())
 
 		if err := post.IsValid(maxPostSize); err != nil {
 			return nil, idx, err
@@ -351,7 +351,7 @@ func (s *SqlPostStore) Update(rctx request.CTX, newPost *model.Post, oldPost *mo
 	oldPost.Id = model.NewId()
 	oldPost.PreCommit()
 
-	maxPostSize := s.GetMaxPostSize()
+	maxPostSize := storedSizeLimit(s.GetMaxPostSize())
 
 	if err := newPost.IsValid(maxPostSize); err != nil {
 		return nil, err
@@ -412,7 +412,7 @@ func (s *SqlPostStore) Update(rctx request.CTX, newPost *model.Post, oldPost *mo
 
 func (s *SqlPostStore) OverwriteMultiple(rctx request.CTX, posts []*model.Post) (_ []*model.Post, _ int, err error) {
 	updateAt := model.GetMillis()
-	maxPostSize := s.GetMaxPostSize()
+	maxPostSize := storedSizeLimit(s.GetMaxPostSize())
 	for idx, post := range posts {
 		post.UpdateAt = updateAt
 

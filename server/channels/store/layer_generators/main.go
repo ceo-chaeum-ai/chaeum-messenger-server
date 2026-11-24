@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"text/template"
@@ -34,7 +35,30 @@ func main() {
 	if err := buildRetryLayer(); err != nil {
 		log.Fatal(err)
 	}
+	if err := buildEncryptLayer(); err != nil {
+		log.Fatal(err)
+	}
 }
+
+// Chaeum: the storage encryption layer. See encryptlayer/layer.go.
+func buildEncryptLayer() error {
+	code, err := generateLayer("EncryptLayer", "encrypt_layer.go.tmpl")
+	if err != nil {
+		return err
+	}
+	formatedCode, err := format.Source(code)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path.Join("encryptlayer", "encryptlayer.go"), formatedCode, 0644)
+}
+
+// contentType matches the model types that carry content the encryption layer handles.
+var contentType = regexp.MustCompile(`model\.(\w*Post\w*|\w*Draft\w*|\w*FileInfo\w*|\w*Thread\w*|MessageExport|FileForIndexing|UploadSession|ChannelBookmark\w*|\w*ForExport)\b`)
+
+// handWritten lists the methods encryptlayer/layer.go defines itself.
+var handWritten = map[string]bool{"Post.GetMaxPostSize": true, "ScheduledPost.GetMaxMessageSize": true, "FileInfo.SetContent": true}
 
 func buildRetryLayer() error {
 	code, err := generateLayer("RetryLayer", "retry_layer.go.tmpl")
@@ -173,6 +197,47 @@ func generateLayer(name, templateFile string) ([]byte, error) {
 	metadata.Name = name
 
 	myFuncs := template.FuncMap{
+		"handWritten": func(substore, method string) bool { return handWritten[substore+"."+method] },
+		"encParams": func(params []methodParam) string {
+			names := []string{}
+			for _, param := range params {
+				if contentType.MatchString(param.Type) {
+					names = append(names, param.Name)
+				}
+			}
+			return strings.Join(names, ", ")
+		},
+		"decVars": func(results []string) string {
+			vars := []string{}
+			for i, typeName := range results {
+				if !contentType.MatchString(typeName) {
+					continue
+				}
+				if i == 0 {
+					vars = append(vars, "result")
+				} else {
+					vars = append(vars, fmt.Sprintf("resultVar%d", i))
+				}
+			}
+			return strings.Join(vars, ", ")
+		},
+		"namedResults": func(results []string) string {
+			named := []string{}
+			for i, typeName := range results {
+				if typeName == "*PostReminderMetadata" {
+					typeName = "*store.PostReminderMetadata"
+				}
+				switch {
+				case isError(typeName):
+					named = append(named, "err "+typeName)
+				case i == 0:
+					named = append(named, "result "+typeName)
+				default:
+					named = append(named, fmt.Sprintf("resultVar%d %s", i, typeName))
+				}
+			}
+			return "(" + strings.Join(named, ", ") + ")"
+		},
 		"joinResults": func(results []string) string {
 			return strings.Join(results, ", ")
 		},

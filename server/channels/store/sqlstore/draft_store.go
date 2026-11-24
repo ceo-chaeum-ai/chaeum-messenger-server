@@ -90,7 +90,7 @@ func (s *SqlDraftStore) Get(userId, channelId, rootId string, includeDeleted boo
 
 func (s *SqlDraftStore) Upsert(draft *model.Draft) (*model.Draft, error) {
 	draft.PreSave()
-	maxDraftSize := s.GetMaxDraftSize()
+	maxDraftSize := storedSizeLimit(s.GetMaxDraftSize())
 	if err := draft.IsValid(maxDraftSize); err != nil {
 		return nil, err
 	}
