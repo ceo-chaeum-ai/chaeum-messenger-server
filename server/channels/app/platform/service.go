@@ -19,8 +19,10 @@ import (
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
 	"github.com/mattermost/mattermost/server/v8/channels/app/featureflag"
+	"github.com/mattermost/mattermost/server/v8/channels/chaeumsearch"
 	"github.com/mattermost/mattermost/server/v8/channels/jobs"
 	"github.com/mattermost/mattermost/server/v8/channels/store"
+	"github.com/mattermost/mattermost/server/v8/channels/store/encryptlayer"
 	"github.com/mattermost/mattermost/server/v8/channels/store/localcachelayer"
 	"github.com/mattermost/mattermost/server/v8/channels/store/retrylayer"
 	"github.com/mattermost/mattermost/server/v8/channels/store/searchlayer"
@@ -262,8 +264,19 @@ func New(sc ServiceConfig, options ...Option) (*PlatformService, error) {
 				return nil, err
 			}
 
+			// Chaeum: storage encryption sits directly on the SQL layer when it is configured.
+			var baseStore store.Store = ps.sqlStore
+			if encryptlayer.Enabled() {
+				baseStore, err = encryptlayer.NewFromEnv(ps.sqlStore, ps.Log())
+				if err != nil {
+					return nil, err
+				}
+			} else if err = encryptlayer.CheckOff(ps.sqlStore); err != nil {
+				return nil, err
+			}
+
 			searchStore := searchlayer.NewSearchLayer(
-				retrylayer.New(ps.sqlStore),
+				retrylayer.New(baseStore),
 				ps.SearchEngine,
 				ps.Config(),
 			)
@@ -350,7 +363,7 @@ func New(sc ServiceConfig, options ...Option) (*PlatformService, error) {
 			return nil, fmt.Errorf("failed to initialize filebackend: %w", err2)
 		}
 
-		ps.filestore = backend
+		ps.filestore = encryptlayer.WrapFileBackend(backend) // Chaeum: attachments are encrypted at rest
 	}
 
 	if ps.exportFilestore == nil {
@@ -496,6 +509,11 @@ func (ps *PlatformService) initEnterprise() {
 
 	if elasticsearchInterface != nil {
 		ps.SearchEngine.RegisterElasticsearchEngine(elasticsearchInterface(ps))
+	}
+
+	// Chaeum: with storage encryption the database cannot search; a worker process does.
+	if chaeumsearch.Enabled() {
+		ps.SearchEngine.RegisterElasticsearchEngine(chaeumsearch.New(func() store.Store { return ps.Store }, func() store.UserStore { return ps.sqlStore.User() }, ps.Log()))
 	}
 
 	if ldapDiagnosticInterface != nil {
