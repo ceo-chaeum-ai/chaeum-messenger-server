@@ -16,6 +16,7 @@
 | `channels/store/layer_generators` | 암호화 층을 만드는 생성 틀 |
 | `channels/app/platform/service.go`, `channels/store/sqlstore` | 위 기능을 끼우는 줄, 길이 검사 |
 | `public/model/config.go` | 기본 사이트 이름 |
+| `i18n/ko.json`, `../webapp/channels/src/i18n/ko.json` | 한국어 화면 낱말 「채널」을 「대화방」으로 바꿨습니다(2026-11-25). 시스템 콘솔 글과 `@channel` 같은 명령어 낱말은 그대로입니다. |
 
 ## 만들기
 
